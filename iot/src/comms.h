@@ -114,6 +114,7 @@ void mqttConnect()
         if (client.connect(mqttClient))
         {
             Serial.println("Connected to MQTT");
+            // mqttTopic is "challenges/ESP32_Ryan"
             client.subscribe(mqttTopic);
             topicBuffer = "EventLog/" + String(mqttClient);
             mqttTopic = topicBuffer.c_str();
