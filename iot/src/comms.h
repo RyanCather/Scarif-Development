@@ -17,7 +17,7 @@ String topicBuffer;
 
 // Replace with the MQTT broker IP address and port (default port for MQTT is 1883)
 const char* mqttServer = "192.168.1.116";  
-const int mqttPort = 1883;
+const int mqttPort = 5883;
 
 
 unsigned long lastUpdate = 0;
@@ -115,7 +115,9 @@ void mqttConnect()
         {
             Serial.println("Connected to MQTT");
             client.subscribe(mqttTopic);
-            sendDataToServer("EventLog", String(mqttClient) + " is online.");
+            topicBuffer = "EventLog/" + String(mqttClient);
+            mqttTopic = topicBuffer.c_str();
+            sendDataToServer(mqttTopic, String(mqttClient) + " is online.");
         }
         else
         {
