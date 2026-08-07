@@ -1,6 +1,6 @@
 // MQTT client name
 // TODO - Change the name to the specific module name.
-const char *mqttClient = "ESP32-Ryan"; // This should be unique for each ESP32, e.g: "ESP32_Servo", "ESP32_Piezo", etc
+const char *mqttClient = "ESP32-Ryan2"; // This should be unique for each ESP32, e.g: "ESP32_Servo", "ESP32_Piezo", etc
 
 // MQTT Topic
 const char *mqttTopic;
@@ -34,6 +34,8 @@ void setup()
         delay(10);
     }
     delay(1000);
+
+    randomSeed(analogRead(A0));   // Seed using an unconnected analog pin for real randomness
 }
 
 void loop()
@@ -42,13 +44,8 @@ void loop()
     mqttConnect(); // Ensure we are connected to the MQTT broker. If not, this will attempt to reconnect.
 
     // 2. Generate and send a random number periodically
-    unsigned long now = millis();
-    if (now - lastUpdate > updateInterval)
-    {
-        lastUpdate = now;
-
-        // TODO: Upload data to server as required.
-    }
+     int randomNumber = random(1, 100001); 
+    sendPeriodicUpdate("sensorData", String(randomNumber));    
 
     client.loop(); // Check for incoming messages and keep the connection alive
     delay(100);
