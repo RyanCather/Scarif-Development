@@ -24,15 +24,51 @@ $eventPage = isset($_GET['event_page']) && is_numeric($_GET['event_page']) ? (in
 if ($eventPage < 1) $eventPage = 1;
 $eventOffset = ($eventPage - 1) * $itemsPerPage;
 
+$flashMessage = '';
+$flashType = 'success';
+
 try {
     $pdo = new PDO($dsn, $user, $pass, $options);
 
-    // 1. Fetch available unique device IDs
+    // ------------------------------------------------------------------
+    // Handle Form Submission: Update or Create Device State (0 or 1)
+    // ------------------------------------------------------------------
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_state') {
+        $inputDeviceId = isset($_POST['target_device_id']) ? trim($_POST['target_device_id']) : '';
+        $inputState    = isset($_POST['state_value']) ? trim($_POST['state_value']) : '';
+
+        if (empty($inputDeviceId)) {
+            $flashMessage = 'Device ID cannot be empty.';
+            $flashType = 'error';
+        } elseif ($inputState !== '0' && $inputState !== '1') {
+            $flashMessage = 'Invalid state value. Must be 0 or 1.';
+            $flashType = 'error';
+        } else {
+            $updateStmt = $pdo->prepare("
+                INSERT INTO devices (device_id, state_value)
+                VALUES (:dev, :state)
+                ON DUPLICATE KEY UPDATE state_value = VALUES(state_value)
+            ");
+            $updateStmt->execute([
+                ':dev'   => $inputDeviceId,
+                ':state' => (int)$inputState
+            ]);
+            $flashMessage = "Successfully updated state for <code>" . htmlspecialchars($inputDeviceId) . "</code> to <strong>" . $inputState . "</strong>.";
+            $flashType = 'success';
+        }
+    }
+
+    // 1. Fetch current devices & states for control panel & dropdown filter
+    $deviceStatesStmt = $pdo->query("SELECT device_id, state_value, updated_at FROM devices ORDER BY device_id ASC");
+    $deviceStates = $deviceStatesStmt->fetchAll();
+
     $devicesStmt = $pdo->query("
         SELECT DISTINCT device_id FROM (
             SELECT device_id FROM sensor_readings
             UNION
             SELECT device_id FROM event_logs
+            UNION
+            SELECT device_id FROM devices
         ) AS combined_devices ORDER BY device_id ASC
     ");
     $availableDevices = $devicesStmt->fetchAll(PDO::FETCH_COLUMN);
@@ -109,12 +145,29 @@ function buildUrl($overrides = []) {
         .nav-btn { display: inline-block; background: #8b0000; color: white; padding: 10px 16px; border-radius: 6px; text-decoration: none; font-weight: bold; }
         .nav-btn:hover { background: #a00000; }
         
+        /* Alert Message */
+        .alert { padding: 12px 16px; border-radius: 6px; margin-bottom: 1.5rem; font-weight: 500; }
+        .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .alert-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        /* Form & Control Card */
+        .card { background: #fff; padding: 1.25rem 1.5rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; }
+        .form-row { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 0.75rem; }
+        .form-row input[type="text"] { padding: 8px 12px; border-radius: 4px; border: 1px solid #ccc; font-size: 1rem; width: 220px; }
+        .form-row select { padding: 8px 12px; border-radius: 4px; border: 1px solid #ccc; font-size: 1rem; }
+        .btn-submit { background: #0056b3; color: white; border: none; padding: 9px 18px; border-radius: 4px; font-weight: bold; cursor: pointer; }
+        .btn-submit:hover { background: #004085; }
+
         /* Filter Card */
-        .filter-card { background: #fff; padding: 1rem 1.5rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem; }
+        .filter-card { display: flex; align-items: center; gap: 1rem; }
         .filter-card label { font-weight: bold; color: #555; }
-        .filter-card select { padding: 8px 12px; border-radius: 4px; border: 1px solid #ccc; font-size: 1rem; }
         .reset-link { color: #0056b3; text-decoration: none; font-size: 0.9rem; }
         .reset-link:hover { text-decoration: underline; }
+
+        /* State Badges */
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-weight: bold; font-size: 0.85rem; text-align: center; }
+        .badge-on { background: #28a745; color: white; }
+        .badge-off { background: #6c757d; color: white; }
 
         /* Tables & Layout */
         table { border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 4px; overflow: hidden; }
@@ -144,9 +197,79 @@ function buildUrl($overrides = []) {
         <a href="errors.php" class="nav-btn">View System Error Logs &rarr;</a>
     </div>
 
+    <?php if (!empty($flashMessage)): ?>
+        <div class="alert alert-<?= $flashType ?>">
+            <?= $flashMessage ?>
+        </div>
+    <?php endif; ?>
+
+    <!-- Device State Controller Form -->
+    <div class="card">
+        <h2>Device State Controller</h2>
+        <form method="POST" action="index.php">
+            <input type="hidden" name="action" value="update_state">
+            <div class="form-row">
+                <div>
+                    <label for="target_device_id" style="font-weight: bold; display: block; margin-bottom: 4px;">Device ID:</label>
+                    <input type="text" name="target_device_id" id="target_device_id" placeholder="e.g. ESP32-01" required list="device-list">
+                    <datalist id="device-list">
+                        <?php foreach ($availableDevices as $dev): ?>
+                            <option value="<?= htmlspecialchars($dev) ?>">
+                        <?php endforeach; ?>
+                    </datalist>
+                </div>
+                <div>
+                    <label for="state_value" style="font-weight: bold; display: block; margin-bottom: 4px;">State Value:</label>
+                    <select name="state_value" id="state_value">
+                        <option value="1">1 (ON / Active)</option>
+                        <option value="0">0 (OFF / Inactive)</option>
+                    </select>
+                </div>
+                <div style="align-self: flex-end;">
+                    <button type="submit" class="btn-submit">Update State</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Registered Device States Table -->
+    <div class="table-section">
+        <h2>Active Device States</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 40%;">Device ID</th>
+                    <th style="width: 30%;">Current State</th>
+                    <th style="width: 30%;">Last Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if (empty($deviceStates)): ?>
+                <tr>
+                    <td colspan="3" class="empty-row">No device states registered yet. Use the controller above to create one.</td>
+                </tr>
+                <?php else: ?>
+                    <?php foreach ($deviceStates as $st): ?>
+                    <tr>
+                        <td><code><?= htmlspecialchars($st['device_id']) ?></code></td>
+                        <td>
+                            <?php if ($st['state_value'] == 1): ?>
+                                <span class="badge badge-on">1 (ON)</span>
+                            <?php else: ?>
+                                <span class="badge badge-off">0 (OFF)</span>
+                            <?php endif; ?>
+                        </td>
+                        <td><?= htmlspecialchars($st['updated_at']) ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+
     <!-- Filter Control -->
-    <div class="filter-card">
-        <label for="deviceFilter">Filter by Device:</label>
+    <div class="card filter-card">
+        <label for="deviceFilter">Filter Telemetry by Device:</label>
         <form method="GET" action="index.php" id="filterForm">
             <select name="device_id" id="deviceFilter" onchange="document.getElementById('filterForm').submit();">
                 <option value="ALL" <?= $selectedDevice === 'ALL' ? 'selected' : '' ?>>-- All Devices --</option>

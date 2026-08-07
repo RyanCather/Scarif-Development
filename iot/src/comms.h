@@ -132,7 +132,7 @@ void mqttConnect()
 void mqttSetup()
 {
     // Construct the MQTT topic dynamically
-    topicBuffer = "challenges/" + String(mqttClient);
+    topicBuffer = "devicePayload/" + String(mqttClient);
     mqttTopic = topicBuffer.c_str();
 
     client.setServer(mqttServer, mqttPort);
