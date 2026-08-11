@@ -8,6 +8,12 @@ const char *mqttTopic;
 #include <Arduino.h>
 #include "comms.h"
 
+#include <Wire.h>
+#include "Adafruit_ADT7410.h"
+
+// Create the ADT7410 temperature sensor object
+Adafruit_ADT7410 tempsensor = Adafruit_ADT7410();
+
 void performActionBasedOnPayload(String payload)
 {
     Serial.print("Payload: ");
@@ -35,7 +41,15 @@ void setup()
     }
     delay(1000);
 
-    randomSeed(analogRead(A0));   // Seed using an unconnected analog pin for real randomness
+    randomSeed(analogRead(A0)); // Seed using an unconnected analog pin for real randomness
+    
+    // Make sure the sensor is found, you can also pass in a different i2c
+    // address with tempsensor.begin(0x49) for example
+    if (!tempsensor.begin())
+    {
+        Serial.println("Couldn't find ADT7410!");
+        while (1);
+    }
 }
 
 void loop()
@@ -44,8 +58,11 @@ void loop()
     mqttConnect(); // Ensure we are connected to the MQTT broker. If not, this will attempt to reconnect.
 
     // 2. Generate and send a random number periodically
-     int randomNumber = random(1, 100001); 
-    sendPeriodicUpdate("sensorData", String(randomNumber));    
+    int randomNumber = random(1, 100001);
+
+    float tempInC = tempsensor.readTempC();
+    //Serial.println(tempInC);
+    sendPeriodicUpdate("sensorData", String(tempInC));
 
     client.loop(); // Check for incoming messages and keep the connection alive
     delay(100);
