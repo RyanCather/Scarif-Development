@@ -1,0 +1,594 @@
+IoT Central System Telemetry: Practical How-To & Technical ReferenceSubject: Information Technology / Digital
+Technologies (ACT BSSS)Target Audience: Year 11 Senior Secondary StudentsThis document is structured using the Diátaxis
+framework:How-To Guide: Step-by-step practical instructions to build a web-based IoT telemetry dashboard
+(index.php).Technical Reference & Component Explanation: In-depth technical breakdowns of relational database
+operations, security protocols, and state management, paired with student-friendly plain English
+explanations.PrerequisitesBefore beginning this tutorial, ensure you have the following components configured:An active
+IoT module (such as an ESP32 micro-controller) programmed and actively publishing telemetry readings and event logs to
+an MQTT broker.A running MySQL/MariaDB database server populated with devices, sensor_readings, and event_logs tables.A
+local or containerised web server running PHP 8.x with the pdo_mysql extension enabled.Part 1: How-To Guide — Building
+the Dashboard (index.php)Follow these sequential steps to assemble the complete PHP web interface.Step 1: Establish
+Database Connection via PDOCreate index.php and configure PHP Data Objects (PDO) to retrieve connection parameters from
+environment variables (such as those supplied by Docker) with local defaults.
+<?php
+// Retrieve database credentials from environment or fall back to local defaults
+$host    = getenv('DB_HOST') ?: '10.0.0.100';
+$port    = getenv('DB_PORT') ?: '3306';
+$db      = getenv('DB_NAME') ?: 'iot_telemetry';
+$user    = getenv('DB_USER') ?: 'iot_user';
+$pass    = getenv('DB_PASSWORD') ?: 'iot_password';
+$charset = 'utf8mb4';
+
+// Assemble Data Source Name (DSN) string
+$dsn = "mysql:host=$host;port=$port;dbname=$db;charset=$charset";
+$options = [
+    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+];
+
+try {
+    $pdo = new PDO($dsn, $user, $pass, $options);
+} catch (\PDOException $e) {
+    die("Database Connection Error: " . $e->getMessage());
+}
+?>
+Step 2: Set Up Navigation Helpers & Query ParametersRead incoming GET parameters from the URL query string to establish
+device filter selections, flash alert variables, and table page numbers.// Helper function to maintain active GET
+parameters across pagination links
+function buildUrl($overrides = []) {
+$params = $_GET;
+foreach ($overrides as $key => $val) {
+$params[$key] = $val;
+}
+return 'index.php?' . http_build_query($params);
+}
+
+// Read selected filter parameter ('ALL' by default)
+$selectedDevice = isset($_GET['device_id']) ? trim($_GET['device_id']) : 'ALL';
+$itemsPerPage = 10;
+
+// Compute offset for Sensor Readings table pagination
+$sensorPage = isset($_GET['sensor_page']) && is_numeric($_GET['sensor_page']) ? (int)$_GET['sensor_page'] : 1;
+if ($sensorPage < 1) $sensorPage=1; $sensorOffset=($sensorPage - 1) * $itemsPerPage; // Compute offset for Event Logs
+    table pagination $eventPage=isset($_GET['event_page']) && is_numeric($_GET['event_page']) ? (int)$_GET['event_page']
+    : 1; if ($eventPage < 1) $eventPage=1; $eventOffset=($eventPage - 1) * $itemsPerPage; $flashMessage='' ;
+    $flashType='success' ; Step 3: Process Device State Control Submissions (POST Requests)Handle incoming POST form
+    submissions when a user alters a device's operational state (1 for ON, 0 for OFF).if
+    ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action']) && $_POST['action']==='update_state' ) {
+    $inputDeviceId=isset($_POST['target_device_id']) ? trim($_POST['target_device_id']) : '' ;
+    $inputState=isset($_POST['state_value']) ? trim($_POST['state_value']) : '' ; if (empty($inputDeviceId)) {
+    $flashMessage='Device ID cannot be empty.' ; $flashType='error' ; } elseif ($inputState !=='0' && $inputState !=='1'
+    ) { $flashMessage='Invalid state value. Must be 0 or 1.' ; $flashType='error' ; } else { // Execute an atomic UPSERT
+    query $updateStmt=$pdo->prepare("
+    INSERT INTO devices (device_id, state_value)
+    VALUES (:dev, :state)
+    ON DUPLICATE KEY UPDATE state_value = VALUES(state_value)
+    ");
+    $updateStmt->execute([
+    ':dev' => $inputDeviceId,
+    ':state' => (int)$inputState
+    ]);
+    $flashMessage = "Successfully updated state for <code>" . htmlspecialchars($inputDeviceId) . "</code> to <strong>" .
+        $inputState . "</strong>.";
+    $flashType = 'success';
+    }
+    }
+    Step 4: Fetch Active Devices & Operational StatesQuery the database to build the master list of active devices using
+    a UNION query and retrieve registered device states.// 1. Fetch currently registered device states
+    $deviceStatesStmt = $pdo->query("SELECT device_id, state_value, updated_at FROM devices ORDER BY device_id ASC");
+    $deviceStates = $deviceStatesStmt->fetchAll();
+
+    // 2. Fetch distinct list of all devices across all telemetry tables
+    $devicesStmt = $pdo->query("
+    SELECT DISTINCT device_id FROM (
+    SELECT device_id FROM sensor_readings
+    UNION
+    SELECT device_id FROM event_logs
+    UNION
+    SELECT device_id FROM devices
+    ) AS combined_devices ORDER BY device_id ASC
+    ");
+    $availableDevices = $devicesStmt->fetchAll(PDO::FETCH_COLUMN);
+    Step 5: Query Paginated Sensor ReadingsFetch sensor telemetry records based on whether the user is filtering by a
+    specific device or viewing all devices.if ($selectedDevice !== 'ALL' && !empty($selectedDevice)) {
+    // Count total sensor records for the filtered device
+    $sensorCountStmt = $pdo->prepare("SELECT COUNT(*) FROM sensor_readings WHERE device_id = :dev");
+    $sensorCountStmt->execute([':dev' => $selectedDevice]);
+    $totalSensors = (int)$sensorCountStmt->fetchColumn();
+
+    // Fetch paginated sensor records for the filtered device
+    $sensorStmt = $pdo->prepare("
+    SELECT * FROM sensor_readings
+    WHERE device_id = :dev
+    ORDER BY recorded_at DESC
+    LIMIT :limit OFFSET :offset
+    ");
+    $sensorStmt->bindValue(':dev', $selectedDevice);
+    } else {
+    // Count total sensor records across all devices
+    $sensorCountStmt = $pdo->query("SELECT COUNT(*) FROM sensor_readings");
+    $totalSensors = (int)$sensorCountStmt->fetchColumn();
+
+    // Fetch paginated sensor records across all devices
+    $sensorStmt = $pdo->prepare("
+    SELECT * FROM sensor_readings
+    ORDER BY recorded_at DESC
+    LIMIT :limit OFFSET :offset
+    ");
+    }
+
+    // Bind integer bounds explicitly for LIMIT and OFFSET
+    $sensorStmt->bindValue(':limit', $itemsPerPage, PDO::PARAM_INT);
+    $sensorStmt->bindValue(':offset', $sensorOffset, PDO::PARAM_INT);
+    $sensorStmt->execute();
+
+    $readings = $sensorStmt->fetchAll();
+    $totalSensorPages = ceil($totalSensors / $itemsPerPage) ?: 1;
+    Step 6: Query Paginated Event LogsExecute identical conditional query logic to retrieve paginated system event
+    logs.if ($selectedDevice !== 'ALL' && !empty($selectedDevice)) {
+    // Count total event records for the filtered device
+    $eventCountStmt = $pdo->prepare("SELECT COUNT(*) FROM event_logs WHERE device_id = :dev");
+    $eventCountStmt->execute([':dev' => $selectedDevice]);
+    $totalEvents = (int)$eventCountStmt->fetchColumn();
+
+    // Fetch paginated event records for the filtered device
+    $eventStmt = $pdo->prepare("
+    SELECT * FROM event_logs
+    WHERE device_id = :dev
+    ORDER BY logged_at DESC
+    LIMIT :limit OFFSET :offset
+    ");
+    $eventStmt->bindValue(':dev', $selectedDevice);
+    } else {
+    // Count total event records across all devices
+    $eventCountStmt = $pdo->query("SELECT COUNT(*) FROM event_logs");
+    $totalEvents = (int)$eventCountStmt->fetchColumn();
+
+    // Fetch paginated event records across all devices
+    $eventStmt = $pdo->prepare("
+    SELECT * FROM event_logs
+    ORDER BY logged_at DESC
+    LIMIT :limit OFFSET :offset
+    ");
+    }
+
+    $eventStmt->bindValue(':limit', $itemsPerPage, PDO::PARAM_INT);
+    $eventStmt->bindValue(':offset', $eventOffset, PDO::PARAM_INT);
+    $eventStmt->execute();
+
+    $logs = $eventStmt->fetchAll();
+    $totalEventPages = ceil($totalEvents / $itemsPerPage) ?: 1;
+    Step 7: Render HTML View ElementsAppend the front-end layout to index.php, rendering control forms, dynamic data
+    tables, and pagination controls.
+    <!DOCTYPE html>
+    <html lang="en-AU">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>IoT Central System Telemetry</title>
+        <style>
+            body {
+                font-family: system-ui, -apple-system, sans-serif;
+                margin: 2rem;
+                background: #f4f4f9;
+                color: #333;
+            }
+
+            .header-container {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 1.5rem;
+            }
+
+            h1,
+            h2 {
+                color: #333;
+                margin: 0 0 0.5rem 0;
+            }
+
+            .alert {
+                padding: 12px 16px;
+                border-radius: 6px;
+                margin-bottom: 1.5rem;
+                font-weight: 500;
+            }
+
+            .alert-success {
+                background: #d4edda;
+                color: #155724;
+                border: 1px solid #c3e6cb;
+            }
+
+            .alert-error {
+                background: #f8d7da;
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }
+
+            .card {
+                background: #fff;
+                padding: 1.25rem 1.5rem;
+                border-radius: 6px;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+                margin-bottom: 2rem;
+            }
+
+            .form-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 1rem;
+                align-items: center;
+                margin-top: 0.75rem;
+            }
+
+            .form-row input[type="text"],
+            .form-row select {
+                padding: 8px 12px;
+                border-radius: 4px;
+                border: 1px solid #ccc;
+                font-size: 1rem;
+            }
+
+            .btn-submit {
+                background: #0056b3;
+                color: white;
+                border: none;
+                padding: 9px 18px;
+                border-radius: 4px;
+                font-weight: bold;
+                cursor: pointer;
+            }
+
+            .btn-submit:hover {
+                background: #004085;
+            }
+
+            .badge {
+                display: inline-block;
+                padding: 4px 10px;
+                border-radius: 12px;
+                font-weight: bold;
+                font-size: 0.85rem;
+            }
+
+            .badge-on {
+                background: #28a745;
+                color: white;
+            }
+
+            .badge-off {
+                background: #6c757d;
+                color: white;
+            }
+
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                background: #fff;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+                margin-bottom: 1rem;
+            }
+
+            th,
+            td {
+                padding: 12px 15px;
+                border: 1px solid #e0e0e0;
+                text-align: left;
+            }
+
+            th {
+                background: #0056b3;
+                color: white;
+            }
+
+            tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+
+            code {
+                background: #eef2f7;
+                padding: 3px 6px;
+                border-radius: 4px;
+                font-family: monospace;
+                color: #0056b3;
+            }
+
+            .empty-row {
+                text-align: center;
+                color: #666;
+                font-style: italic;
+            }
+
+            .pagination {
+                display: flex;
+                gap: 6px;
+                align-items: center;
+                justify-content: flex-end;
+                margin-top: 0.75rem;
+            }
+
+            .pagination a,
+            .pagination span {
+                padding: 6px 12px;
+                border: 1px solid #ccc;
+                background: #fff;
+                text-decoration: none;
+                color: #333;
+                border-radius: 4px;
+                font-size: 0.9rem;
+            }
+
+            .pagination .active {
+                background: #0056b3;
+                color: white;
+                font-weight: bold;
+            }
+
+            .pagination .disabled {
+                color: #aaa;
+                pointer-events: none;
+                background: #f0f0f0;
+            }
+
+            .page-meta {
+                font-size: 0.85rem;
+                color: #666;
+                margin-right: auto;
+            }
+        </style>
+    </head>
+
+    <body>
+
+        <div class="header-container">
+            <div>
+                <h1>Central IoT System Telemetry</h1>
+                <p style="color: #666; margin-top: 0.25rem;">Live feed of student ESP32 telemetry & events</p>
+            </div>
+        </div>
+
+        <?php if (!empty($flashMessage)): ?>
+        <div class="alert alert-<?= $flashType ?>">
+            <?= $flashMessage ?>
+        </div>
+        <?php endif; ?>
+
+        <!-- Device State Control Form -->
+        <div class="card">
+            <h2>Device State Controller</h2>
+            <form method="POST" action="index.php">
+                <input type="hidden" name="action" value="update_state">
+                <div class="form-row">
+                    <div>
+                        <label for="target_device_id" style="font-weight: bold; display: block;">Device ID:</label>
+                        <input type="text" name="target_device_id" id="target_device_id" placeholder="e.g. ESP32-01"
+                            required list="device-list">
+                        <datalist id="device-list">
+                            <?php foreach ($availableDevices as $dev): ?>
+                            <option value="<?= htmlspecialchars($dev) ?>">
+                                <?php endforeach; ?>
+                        </datalist>
+                    </div>
+                    <div>
+                        <label for="state_value" style="font-weight: bold; display: block;">State Value:</label>
+                        <select name="state_value" id="state_value">
+                            <option value="1">1 (ON / Active)</option>
+                            <option value="0">0 (OFF / Inactive)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <button type="submit" class="btn-submit">Update State</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- Active Device States Table -->
+        <div class="card">
+            <h2>Active Device States</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Device ID</th>
+                        <th>Current State</th>
+                        <th>Last Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($deviceStates)): ?>
+                    <tr>
+                        <td colspan="3" class="empty-row">No registered states found.</td>
+                    </tr>
+                    <?php else: ?>
+                    <?php foreach ($deviceStates as $st): ?>
+                    <tr>
+                        <td><code><?= htmlspecialchars($st['device_id']) ?></code></td>
+                        <td>
+                            <?php if ($st['state_value'] == 1): ?>
+                            <span class="badge badge-on">1 (ON)</span>
+                            <?php else: ?>
+                            <span class="badge badge-off">0 (OFF)</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?= htmlspecialchars($st['updated_at']) ?>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Device Filter Control -->
+        <div class="card" style="display: flex; align-items: center; gap: 1rem;">
+            <label for="deviceFilter" style="font-weight: bold;">Filter Telemetry by Device:</label>
+            <form method="GET" action="index.php" id="filterForm">
+                <select name="device_id" id="deviceFilter" onchange="document.getElementById('filterForm').submit();">
+                    <option value="ALL" <?=$selectedDevice==='ALL' ? 'selected' : '' ?>>-- All Devices --</option>
+                    <?php foreach ($availableDevices as $dev): ?>
+                    <option value="<?= htmlspecialchars($dev) ?>" <?=$selectedDevice===$dev ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($dev) ?>
+                    </option>
+                    <?php endforeach; ?>
+                </select>
+            </form>
+            <?php if ($selectedDevice !== 'ALL'): ?>
+            <a href="index.php" style="color: #0056b3; text-decoration: none;">&times; Clear Filter</a>
+            <?php endif; ?>
+        </div>
+
+        <!-- Sensor Readings Table -->
+        <div class="card">
+            <h2>Recent Sensor Readings
+                <?= $selectedDevice !== 'ALL' ? "for <code>" . htmlspecialchars($selectedDevice) . "</code>" : "" ?>
+            </h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Device ID</th>
+                        <th>Sensor Value</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($readings)): ?>
+                    <tr>
+                        <td colspan="4" class="empty-row">No sensor readings found.</td>
+                    </tr>
+                    <?php else: ?>
+                    <?php foreach ($readings as $row): ?>
+                    <tr>
+                        <td>
+                            <?= htmlspecialchars($row['id']) ?>
+                        </td>
+                        <td>
+                            <a href="<?= buildUrl(['device_id' => $row['device_id'], 'sensor_page' => 1]) ?>">
+                                <code><?= htmlspecialchars($row['device_id']) ?></code>
+                            </a>
+                        </td>
+                        <td><strong>
+                                <?= htmlspecialchars($row['sensor_value']) ?>
+                            </strong></td>
+                        <td>
+                            <?= htmlspecialchars($row['recorded_at']) ?>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+
+            <!-- Sensor Readings Pagination -->
+            <?php if ($totalSensorPages > 1): ?>
+            <div class="pagination">
+                <span class="page-meta">Showing
+                    <?= min($sensorOffset + 1, $totalSensors) ?>–
+                    <?= min($sensorOffset + $itemsPerPage, $totalSensors) ?> of
+                    <?= $totalSensors ?>
+                </span>
+
+                <?php if ($sensorPage > 1): ?>
+                <a href="<?= buildUrl(['sensor_page' => $sensorPage - 1]) ?>">&laquo; Prev</a>
+                <?php else: ?>
+                <span class="disabled">&laquo; Prev</span>
+                <?php endif; ?>
+
+                <?php for ($i = 1; $i <= $totalSensorPages; $i++): ?>
+                <?php if ($i == $sensorPage): ?>
+                <span class="active">
+                    <?= $i ?>
+                </span>
+                <?php else: ?>
+                <a href="<?= buildUrl(['sensor_page' => $i]) ?>">
+                    <?= $i ?>
+                </a>
+                <?php endif; ?>
+                <?php endfor; ?>
+
+                <?php if ($sensorPage < $totalSensorPages): ?>
+                <a href="<?= buildUrl(['sensor_page' => $sensorPage + 1]) ?>">Next &raquo;</a>
+                <?php else: ?>
+                <span class="disabled">Next &raquo;</span>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
+        </div>
+
+    </body>
+
+    </html>
+    Part 2: Technical Reference & Component ExplanationsThis section breaks down the foundational technical concepts
+    used throughout this application. Each concept features a technical description followed by a plain English
+    explanation designed for ACT BSSS Digital Technologies studies.1. Database Connections via PDO & Container
+    Environment VariablesTechnical DescriptionPHP Data Objects (PDO) provides an object-oriented database abstraction
+    layer. The getenv() function reads system-level environment variables supplied by container orchestration files
+    (such as docker-compose.yml). Fallback operators (?:) supply default strings if environment variables are
+    unassigned.Plain English ExplanationThink of getenv() as asking the underlying operating system: "What address and
+    password should I use to connect to the database?"Instead of typing secret database passwords directly into your
+    source code—which creates security risks if uploaded to GitHub—the code retrieves settings from the environment. PDO
+    acts like a universal adapter, translating PHP instructions into commands MySQL understands.2. SQL Prepared
+    Statements & Injection MitigationTechnical DescriptionPrepared statements separate SQL code execution from dynamic
+    user data. PDO::prepare() sends the SQL statement template to the database server to be pre-compiled. Parameters
+    bound via bindValue() or execute() are treated strictly as literal data rather than executable SQL code, preventing
+    SQL Injection (SQLi) attacks.// Binding parameters explicitly ensures secure typing
+    $sensorStmt->bindValue(':limit', $itemsPerPage, PDO::PARAM_INT);
+    $sensorStmt->bindValue(':offset', $sensorOffset, PDO::PARAM_INT);
+    Plain English ExplanationImagine submitting a blank official form. The database inspects and accepts the structure
+    of the form first. Then, you fill in the blank spaces with your specific variables (such as a device name or page
+    number).Because the database already compiled the form's structure, any malicious SQL commands typed into those
+    blank spaces are treated purely as harmless text strings rather than commands.3. Deep-Dive: The Atomic UPSERT
+    StatementINSERT INTO devices (device_id, state_value)
+    VALUES (:dev, :state)
+    ON DUPLICATE KEY UPDATE state_value = VALUES(state_value);
+    Technical BreakdownINSERT INTO devices: Instructs MySQL to attempt writing a new row containing device_id and
+    state_value.ON DUPLICATE KEY UPDATE: A conditional clause triggered when a PRIMARY KEY or UNIQUE constraint
+    violation occurs (i.e. the device_id already exists).state_value = VALUES(state_value): Updates the existing row's
+    state column using the new parameter value passed in the execution payload.Plain English ExplanationImagine adding a
+    name to a signup sheet:You look for a person's name on the sheet.If their name is not there, you write it down on a
+    new line (INSERT).If their name is already on the sheet, you overwrite their status next to their existing entry
+    (UPDATE).An UPSERT performs both checks in a single database operation, saving your server from running separate
+    query commands.4. Deep-Dive: Multi-Table Consolidation (UNION)SELECT DISTINCT device_id FROM (
+    SELECT device_id FROM sensor_readings
+    UNION
+    SELECT device_id FROM event_logs
+    UNION
+    SELECT device_id FROM devices
+    ) AS combined_devices ORDER BY device_id ASC;
+    Technical BreakdownUNION: Merges the output rows of multiple independent SELECT queries into a single combined
+    dataset.Subquery (...) AS combined_devices: Wraps the stacked query results into an intermediate virtual
+    table.SELECT DISTINCT ... ORDER BY device_id ASC: Removes duplicate string rows from the virtual table and sorts the
+    final list alphabetically.Plain English ExplanationSuppose three separate teachers keep attendance sheets for
+    robotics, programming, and networking clubs. To build a master roster of all participating students:You stack all
+    three attendance sheets on top of each other (UNION).You cross off duplicate names (DISTINCT).You sort the unique
+    names from A to Z (ORDER BY).This guarantees your HTML dropdown displays every micro-controller active in the
+    database.5. Deep-Dive: Pagination with LIMIT and OFFSETSELECT * FROM sensor_readings
+    ORDER BY recorded_at DESC
+    LIMIT :limit OFFSET :offset;
+    Technical BreakdownORDER BY recorded_at DESC: Sorts telemetry data so the newest entries appear first.LIMIT :limit:
+    Defines the maximum number of rows returned per database query (e.g. 10 rows).OFFSET :offset: Specifies the starting
+    row index MySQL skips before collecting matching records.Plain English ExplanationThink of reading a 50-page
+    notebook where each page holds 10 lines of notes:Page 1: Retrieve 10 lines starting from index 0 (LIMIT 10 OFFSET
+    0).Page 2: Retrieve 10 lines skipping the first 10 lines (LIMIT 10 OFFSET 10).Page 3: Retrieve 10 lines skipping the
+    first 20 lines (LIMIT 10 OFFSET 20).6. Sanitisation & Cross-Site Scripting (XSS) PreventionTechnical DescriptionThe
+    htmlspecialchars() function converts reserved HTML characters (<,>, &, ") into safely displayable HTML entity codes
+        (such as &lt; and &gt;).Plain English ExplanationIf a hacker sends telemetry data named
+        <script>alert('Hacked!');</script>, displaying that string directly in a browser could cause the browser to
+        execute the code.Passing text through htmlspecialchars() converts the < and> symbols into plain text markers,
+            ensuring the browser displays the harmless code text on screen instead of running it.7. Query Parameter
+            State Preservation (buildUrl())Technical DescriptionThe buildUrl() function clones the global $_GET array
+            and merges any key updates passed into the function array. It returns an updated query string using
+            http_build_query().function buildUrl($overrides = []) {
+            $params = $_GET; // Duplicate current query string parameters
+            foreach ($overrides as $key => $val) {
+            $params[$key] = $val; // Override targeted parameter key
+            }
+            return 'index.php?' . http_build_query($params);
+            }
+            Plain English ExplanationWhen browsing a web page with multiple controls (such as a device filter drop-down
+            and pagination links), clicking to page 2 of a table can accidentally clear the currently filtered device
+            name.buildUrl() keeps track of all your active settings (like your device filter) and updates only the page
+            number link you clicked, preventing your filter settings from disappearing.
