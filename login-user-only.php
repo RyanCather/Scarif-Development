@@ -15,7 +15,7 @@ $charset = 'utf8mb4';
 
 $dsn = "mysql:host=$host;port=$port;dbname=$dbName;charset=$charset";
 
-// Fallback for PHP 8.4+ vs legacy multi-statement constant
+// Fallback logic for PHP 8.4+ vs PHP < 8.4 Multi-Statement attributes
 $multiStmtAttr = class_exists('\Pdo\Mysql')
     ? \Pdo\Mysql::ATTR_MULTI_STATEMENTS
     : PDO::MYSQL_ATTR_MULTI_STATEMENTS;
@@ -23,7 +23,7 @@ $multiStmtAttr = class_exists('\Pdo\Mysql')
 $options = [
     PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-    PDO::ATTR_EMULATE_PREPARES   => true, // Enabled so PDO handles string-concatenated SQL queries correctly
+    PDO::ATTR_EMULATE_PREPARES   => false,
     $multiStmtAttr               => true,
 ];
 
@@ -93,7 +93,7 @@ try {
                                             <i class="fas fa-lock fa-lg me-3 fa-fw form-icon"></i>
                                             <div class="form-outline flex-fill mb-0">
                                                 <label class="form-label" for="password">Password</label>
-                                                <input type="password" id="password" name="password" class="form-control form-control-lg" required />
+                                                <input type="password" id="password" name="password" class="form-control form-control-lg" />
                                             </div>
                                         </div>
 
@@ -109,23 +109,23 @@ try {
                                     <div class="mt-4">
                                         <?php
                                         if (isset($_POST['login'])) {
-                                            $v_input_user = trim($_POST['username']);
+                                            $v_input_user = $_POST['username'];
                                             $v_input_pass = $_POST['password'];
 
-                                            // VULNERABLE QUERY: Concatenated string variable
+                                            // INSECURE: Direct input concatenation allowing SQL Injection
                                             $query = "SELECT user_id, username, password_hash, first_name, access_level FROM users WHERE username = '$v_input_user'";
 
-                                            // Classroom Debug Log
+                                            // Visible Query Debug Console for classroom viewing
                                             echo '<div class="alert alert-warning small font-monospace">
                                                 <strong>Executed Query:</strong><br>' . htmlspecialchars($query) . '
                                               </div>';
 
                                             try {
-                                                $stmt = $db->query($query);
-                                                $user = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : false;
+                                                $result = $db->query($query);
+                                                $user = $result ? $result->fetch() : false;
 
-                                                // Authenticate valid credentials
-                                                if ($user && isset($user['password_hash']) && password_verify($v_input_pass, $user['password_hash'])) {
+                                                // INSECURE PASSTHROUGH: Skips password verification if any record matches
+                                                if ($user) {
                                                     $_SESSION['user_id']      = $user['user_id'];
                                                     $_SESSION['username']     = $user['username'];
                                                     $_SESSION['first_name']   = $user['first_name'];
@@ -138,10 +138,11 @@ try {
                                                 } else {
                                                     echo '<div class="alert alert-danger d-flex align-items-center">
                                                         <i class="fas fa-exclamation-triangle me-2"></i>
-                                                        <div>Incorrect Username or password</div>
+                                                        <div>Invalid username or password.</div>
                                                       </div>';
                                                 }
                                             } catch (PDOException $e) {
+                                                // Displays raw SQL syntax error when students break the query
                                                 echo '<div class="alert alert-danger small font-monospace">
                                                     <strong>SQL Error:</strong> ' . htmlspecialchars($e->getMessage()) . '
                                                   </div>';
