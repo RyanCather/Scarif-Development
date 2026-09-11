@@ -31,6 +31,17 @@ try {
     // Attempt PDO connection configuration
     $pdo = new PDO($dsn, $user, $pass, $options);
     $connected = true;
+    $deviceStatesStmt = $pdo->query("
+    SELECT DISTINCT device_id FROM (
+        SELECT device_id FROM sensor_readings
+        UNION
+        SELECT device_id FROM event_logs
+        UNION
+        SELECT device_id FROM devices
+    ) AS combined_devices ORDER BY device_id ASC
+");
+    $availableDevices = $deviceStatesStmt->fetchAll(PDO::FETCH_COLUMN);
+
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_state') {
         $inputDeviceId = isset($_POST['target_device_id']) ? trim($_POST['target_device_id']) : '';
@@ -80,16 +91,6 @@ try {
     print_r($errorMsg);
 }
 
-$deviceStatesStmt = $pdo->query("
-    SELECT DISTINCT device_id FROM (
-        SELECT device_id FROM sensor_readings
-        UNION
-        SELECT device_id FROM event_logs
-        UNION
-        SELECT device_id FROM devices
-    ) AS combined_devices ORDER BY device_id ASC
-");
-$availableDevices = $deviceStatesStmt->fetchAll(PDO::FETCH_COLUMN);
 
 // print_r($availableDevices);
 
