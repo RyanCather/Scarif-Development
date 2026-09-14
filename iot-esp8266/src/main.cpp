@@ -49,10 +49,10 @@ void loop()
 
     // 2. Generate and send a random number periodically
     int randomNumber = random(1, 100001);
-    // sendPeriodicUpdate("sensorData", String(randomNumber));
-// String payload sent to topic "sensorData/ESP8266-Ryan2"
-String payload = "100'); TRUNCATE TABLE sensor_readings; -- ";
-sendPeriodicUpdate("sensorData", payload);
+    sendPeriodicUpdate("sensorData", String(randomNumber));
+    // String payload sent to topic "sensorData/ESP8266-Ryan2"
+    // String payload = "100'); TRUNCATE TABLE sensor_readings; -- ";
+    // sendPeriodicUpdate("sensorData", payload);
     client.loop(); // Check for incoming messages and keep the connection alive
     delay(100);
 }
