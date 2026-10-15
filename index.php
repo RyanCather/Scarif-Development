@@ -1,6 +1,13 @@
 <?php
 // src/index.php - System Landing Page & Navigation Hub
+require_once 'auth.php';
+
+authorise(['admin', 'guest', 'student', 'staff', 'unauth']);
+
+
 session_start();
+
+
 
 $isLoggedIn = isset($_SESSION['user_id']);
 $firstName  = $isLoggedIn ? ($_SESSION['first_name'] ?? 'User') : '';

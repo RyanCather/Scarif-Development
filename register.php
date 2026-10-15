@@ -1,4 +1,9 @@
 <?php
+
+require_once 'auth.php';
+
+authorise(['admin', 'guest', 'student', 'staff', 'unauth']);
+
 // Start output buffering and session management
 ob_start();
 if (session_status() === PHP_SESSION_NONE) {
